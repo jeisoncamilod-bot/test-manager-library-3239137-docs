@@ -1,3 +1,4 @@
+
 # Arquitectura — Manager Library (.NET)
 
 Arquitectura **hexagonal** (puertos y adaptadores). Las reglas de dependencia son los artículos I a III de [`constitution.md`](constitution.md).
@@ -7,16 +8,16 @@ Arquitectura **hexagonal** (puertos y adaptadores). Las reglas de dependencia so
 ```mermaid
 flowchart LR
     subgraph Entrada
-      HTTP["adapters/inbound/http<br/>(ASP.NET Core (Minimal API))"]
+        HTTP["adapters/inbound/http (ASP.NET Core Minimal API)"]
     end
     subgraph Núcleo
-      APP["application<br/>casos de uso + puertos"]
-      DOM["domain<br/>agregados y objetos de valor"]
+        APP["application: casos de uso y puertos"]
+        DOM["domain: entidades y objetos de valor"]
     end
     subgraph Salida
-      DB["adapters/outbound/persistence<br/>(EF Core 8 + migraciones de EF)"]
-      STO["adapters/outbound/storage<br/>portadas"]
-      SEC["adapters/outbound/security<br/>hash y token"]
+        DB["adapters/outbound/persistence (EF Core 8 y migraciones)"]
+        STO["adapters/outbound/storage (portadas)"]
+        SEC["adapters/outbound/security (hash y tokens)"]
     end
     HTTP --> APP --> DOM
     DB -. implementa puertos de .-> APP
@@ -24,35 +25,47 @@ flowchart LR
     SEC -. implementa .-> APP
 ```
 
-Las flechas de dependencia apuntan **hacia adentro**. `bootstrap` es el único que ve las dos mitades.
+Las dependencias apuntan hacia el núcleo. `bootstrap` es el único módulo que conecta las implementaciones de los puertos con sus adaptadores.
 
 ## 2. Estructura de carpetas
 
 ```text
-src/Library/
-├── domain/              # Book, Loan, LoanItem, Member, User; Isbn, Quantity, DateRange
-├── application/
-│   ├── ports/outbound/  # BookRepository, LoanRepository, MemberRepository, UserRepository,
-│   │                    # ReportReader, Clock, PasswordHasher, TokenIssuer, CoverStorage
-│   └── services/        # LendBooksService, ReturnItemService, CreateBookService, SearchBooksService,
-│                        # OverdueService, MostBorrowedReportService, LoginService, CreateLibrarianService
-├── adapters/
-│   ├── inbound/http/    # routers/controladores, esquemas de petición, manejo de errores
-│   └── outbound/        # persistence/, storage/, security/
-└── bootstrap/composition/   # src/Library.Bootstrap/Composition/PortBindings.cs — único punto de composición
+src/
+├── Library.Domain/
+│   ├── Entities/          # Book, Loan, LoanItem, Member, User
+│   └── ValueObjects/      # Isbn, Quantity, DocumentNumber, DateRange
+├── Library.Application/
+│   ├── Ports/
+│   │   └── Outbound/      # BookRepository, LoanRepository, MemberRepository,
+│   │                      # UserRepository, ReportReader, Clock,
+│   │                      # PasswordHasher, TokenIssuer, CoverStorage
+│   └── Services/          # Casos de uso
+├── Library.Adapters/
+│   ├── Inbound/
+│   │   └── Http/          # Endpoints, peticiones y manejo de errores
+│   └── Outbound/
+│       ├── Persistence/   # EF Core y repositorios
+│       ├── Storage/       # Almacenamiento de portadas
+│       └── Security/      # Hash de claves y tokens
+└── Library.Bootstrap/
+    └── Composition/
+        └── PortBindings.cs
 ```
+
+Esta estructura describe la separación lógica de los proyectos. Los nombres y las rutas definitivas deben coincidir con los proyectos y directorios reales del repositorio.
 
 ## 3. Agregados
 
 | Raíz | Contiene | Invariantes que defiende |
 |---|---|---|
-| `Book` | `Isbn`, copias totales y disponibles, baja lógica | disponibles entre 0 y total; total ≥ 1; título no vacío |
-| `Loan` | colección de `LoanItem` | 1 a 3 líneas; sin libro repetido; vencimiento a 14 días; inmutable salvo devolución |
-| `Member` | documento | documento obligatorio y único |
-| `User` | rol, hash | nombre normalizado; rol en (`admin`, `librarian`) |
+| `Book` | `Isbn`, copias totales y disponibles, baja lógica | Disponibles entre 0 y el total; total ≥ 1; título no vacío. Las restricciones de base de datos pendientes se implementan según T-18. |
+| `Loan` | Colección de `LoanItem` | De 1 a 3 líneas; sin libros repetidos; vencimiento a 14 días; el préstamo no se modifica ni se elimina después de registrarse, salvo la devolución de cada línea. |
+| `Member` | Documento | Documento obligatorio y único. |
+| `User` | Rol y hash | Nombre de usuario normalizado; rol limitado a `admin` o `librarian`. |
 
-`Loan.AddItem` llama a `Book.Withdraw` antes de añadir la línea: descontar el ejemplar y crear la línea son **una sola operación**.
-`Loan.ReturnItem` llama a `Book.Restock` una sola vez por línea.
+`Loan.AddItem` utiliza `Book.Withdraw` antes de añadir la línea. La creación del préstamo, la creación de sus líneas y la actualización de las existencias deben confirmarse como una sola operación transaccional.
+
+`Loan.ReturnItem` utiliza `Book.Restock` una sola vez por línea. Una devolución repetida no debe incrementar nuevamente las existencias.
 
 ## 4. Flujo: registrar un préstamo
 
@@ -64,23 +77,27 @@ sequenceDiagram
     participant M as MemberRepository
     participant B as BookRepository
     participant L as LoanRepository
+
     C->>H: POST /api/v1/loans
     H->>S: Lend(memberId, bookIds)
-    S->>M: obtener socio + líneas sin devolver
-    S->>S: ¿tiene vencidos? ¿supera 3?
-    S->>B: obtener libros por lote (Q3)
-    S->>S: Loan.AddItem → Book.Withdraw (por cada libro)
-    S->>L: guardar préstamo + libros (una transacción)
-    L-->>S: ok o conflicto de versión
-    S-->>H: préstamo o BOOK_NOT_AVAILABLE
+    S->>M: Obtener socio y líneas sin devolver
+    S->>S: Comprobar vencidos y límite de 3
+    S->>B: Obtener libros por lote (Q3)
+    S->>S: Validar disponibilidad y preparar líneas
+    S->>L: Guardar préstamo y actualizar existencias en una transacción
+    L-->>S: Confirmación o conflicto de concurrencia
+    S-->>H: Préstamo creado o error de disponibilidad
     H-->>C: 201 o 409
 ```
 
+La operación debe garantizar que dos solicitudes concurrentes no presten el mismo último ejemplar. La actualización de existencias y el registro del préstamo se confirman juntos o se revierten juntos.
+
 ## 5. Errores
 
-El dominio y la aplicación lanzan errores propios (`BookNotAvailable`, `MemberHasOverdue`, `MemberLimitExceeded`, …). **Solo** el adaptador HTTP los
-traduce al cuerpo único y al código de estado de [`api-contract.md`](api-contract.md). Un error de framework nunca llega al cliente.
+El dominio y la aplicación utilizan errores propios, como `BookNotAvailable`, `MemberHasOverdue` y `MemberLimitExceeded`. El adaptador HTTP los traduce al cuerpo de error uniforme y al código de estado definidos en [`api-contract.md`](api-contract.md).
+
+Los errores internos del framework no deben exponer detalles de implementación, información sensible ni trazas al cliente. Los códigos de estado y los códigos de error concretos deben coincidir con el contrato HTTP.
 
 ## 6. Qué no hay
 
-Sin eventos, sin colas, sin caché, sin microservicios, sin multi-tenencia. Se añaden si un requisito lo pide, no antes.
+Sin eventos, sin colas, sin caché, sin microservicios y sin multi-tenencia. Estas capacidades solo se añadirán si un requisito del proyecto lo solicita.

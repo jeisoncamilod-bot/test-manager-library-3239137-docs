@@ -42,7 +42,9 @@ Como usuario quiero autenticarme para operar según mi rol.
 ### HU-03 · Gestionar libros (admin)
 - **CA-03.1** Crear libro con título, autor, ISBN, categoría y total de ejemplares. Los disponibles arrancan iguales al total.
 - **CA-03.2** El ISBN tiene 13 dígitos y es único entre libros activos. Repetido: 409.
-- **CA-03.3** Total de ejemplares ≥ 1. Cambiar el total ajusta los disponibles en la misma diferencia y **nunca** deja disponibles < 0 (422).
+- 
+- **CA-03.3** El total de ejemplares debe ser mayor o igual que 1. Al modificarlo, los ejemplares disponibles se ajustan en la misma diferencia. La operación se rechaza con 422 si el nuevo total deja los disponibles por debajo de 0 o resulta incompatible con los ejemplares actualmente prestados.
+
 - **CA-03.4** Subir portada (JPG/PNG, máx. 2 MB) guarda una **clave opaca**; sin portada el campo es `null`, nunca cadena vacía.
 - **CA-03.5** Eliminar un libro es **baja lógica**: deja de aparecer en el catálogo pero sigue en los préstamos pasados. Un libro con préstamos abiertos no se da de baja (409).
 
@@ -60,7 +62,8 @@ Como usuario quiero autenticarme para operar según mi rol.
 - **CA-06.1** Un préstamo es de **un** socio, lo registra el usuario autenticado y trae de 1 a 3 líneas.
 - **CA-06.2** No se repite el mismo libro en un préstamo (422).
 - **CA-06.3** Cada línea descuenta **1** ejemplar disponible en la misma operación. Sin ejemplares: 409 y **no se registra nada**.
-- **CA-06.4** Un socio no puede tener más de **3 libros sin devolver** en total (422 con el conteo actual).
+- **CA-06.4** Un socio no puede tener más de **3 libros sin devolver en total**, contando todas sus líneas de préstamo que todavía no tengan `returned_at`. Si la nueva operación supera el límite, responde 422 y no registra el préstamo.
+
 - **CA-06.5** Un socio con algún libro **vencido** no puede pedir otro (409).
 - **CA-06.6** La fecha de vencimiento es `loaned_at + 14 días`. La línea congela título, ISBN y nombre de categoría **en ese instante**.
 - **CA-06.7** El préstamo registrado no se edita ni se borra.
@@ -77,14 +80,16 @@ Como usuario quiero autenticarme para operar según mi rol.
 - **CA-08.3** El estado **se calcula**, no se almacena.
 
 ### HU-09 · Libros vencidos
-- **CA-09.1** Lista las líneas sin devolver con `due_at` anterior a ahora: libro, socio, días de retraso.
+
+- **CA-09.1** Lista las líneas de préstamo sin devolver cuyo `due_at` sea anterior al instante UTC actual. Incluye el libro, el socio y los días de retraso, calculados a partir de la diferencia entre el vencimiento y el instante UTC actual.
+
 - **CA-09.2** Ordenadas por más días de retraso primero. Solo `admin` y `librarian`.
 
 ### HU-10 · Reporte de libros más prestados
-- **CA-10.1** Dado un rango de fechas, una fila por **libro y nombre de categoría congelado**, con la cantidad de veces prestado, ordenado de mayor a menor.
+- **CA-10.1** Dado un rango de fechas, el reporte agrupa los préstamos por identificador del libro y nombre de categoría congelado en `loan_item`. Cuenta las líneas de préstamo registradas dentro del rango, ordena los resultados de mayor a menor cantidad y utiliza los valores históricos, no los del catálogo actual.
 - **CA-10.2** Fin anterior al inicio: 422. Rango sin préstamos: lista vacía, no error.
 - **CA-10.3** El reporte **no** se desglosa por bibliotecario ni por socio.
-- **CA-10.4** Un reporte de un periodo cerrado **no cambia** aunque luego se renombre el libro o su categoría.
+- **CA-10.4** El reporte de un rango de fechas debe conservar los valores históricos de título, ISBN y categoría registrados en cada línea de préstamo, aunque posteriormente se renombre el libro o cambie su categoría en el catálogo.
 - **CA-10.5** Solo `admin`.
 
 ## 4. Reglas de negocio
@@ -106,4 +111,5 @@ Como usuario quiero autenticarme para operar según mi rol.
 | RNF-2 | Dos bibliotecarios prestando el **último ejemplar** a la vez: uno gana, el otro recibe 409 | Prueba concurrente |
 | RNF-3 | La contraseña nunca viaja ni se guarda en claro; nunca aparece en logs | Revisión de logs y de respuestas |
 | RNF-4 | Todo error HTTP usa el mismo cuerpo (ver contrato) | Prueba de contrato |
-| RNF-5 | El sistema levanta con un solo comando y la base arranca vacía | `README` de `infra` |
+| RNF-5 | El sistema levanta con un solo comando y la base de datos se inicializa mediante las migraciones de EF Core, incluyendo el esquema y las cinco categorías fijas. | Instrucciones verificables en el `README` de `infra` y comprobación de las migraciones sobre una base de datos vacía. |
+

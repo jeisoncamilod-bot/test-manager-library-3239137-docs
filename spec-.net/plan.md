@@ -10,11 +10,11 @@ Cómo se construye lo que dicen [`spec.md`](spec.md) y [`constitution.md`](const
 | D-01 | Lenguaje y runtime | .NET 8 / C# 12 | Stack del spec de referencia |
 | D-02 | Framework HTTP | ASP.NET Core (Minimal API) | Contrato en [`api-contract.md`](api-contract.md) |
 | D-03 | Persistencia | EF Core 8 + migraciones de EF sobre PostgreSQL 16 | El esquema es de las migraciones (ADR-001) |
-| D-04 | Concurrencia | Testigo de versión por libro + `CHECK` de rango ([ADR-002](adr/adr-002-concurrencia-optimista.md)) | Último ejemplar (RNF-2) |
+| D-04 | Concurrencia | Control de concurrencia por libro y restricción `CHECK` de disponibilidad ([ADR-002](adr/adr-002-concurrencia-optimista.md)) | Garantizar que dos préstamos simultáneos del último ejemplar no reduzcan las existencias por debajo de cero (RNF-2). |
 | D-05 | Fechas | Instantes UTC (`timestamptz`); el reloj es un puerto (`Clock`) | Probar vencimientos sin esperar 14 días |
 | D-06 | Reporte | Una consulta agregada por un puerto de lectura ([ADR-004](adr/adr-004-reporte-agregado-y-congelado.md)) | Estable y barato |
-| D-07 | Objetos de valor | `Isbn`, `Quantity`, `DocumentNumber`, `DateRange`: viven dentro de la fila de su dueño, sin tabla | No tienen identidad |
-| D-08 | Portadas | Binario en almacenamiento externo (disco en local, S3 en producción); la base guarda solo `cover_key` | Clave opaca, nunca ruta |
+| D-07 | Objetos de valor | `Isbn`, `Quantity`, `DocumentNumber`, `DateRange`: objetos del dominio, sin tablas propias | Representan valores del dominio y no tienen identidad propia. |
+| D-08 | Portadas | Binario en almacenamiento externo; disco en local y S3 en producción si se configura ese adaptador. La base guarda solo `cover_key`. | La base almacena una clave opaca, nunca una ruta ni el contenido binario. |
 | D-09 | Contraseñas | BCrypt (factor 12) detrás del puerto `PasswordHasher`; el dominio nunca ve la clave en claro | Artículo IX |
 | D-10 | Arranque | La aplicación crea el admin inicial desde `ADMIN_USERNAME` / `ADMIN_PASSWORD` | La base no puede producir el hash |
 | D-11 | Autenticación | JWT HS256, 8 horas, clave en `JWT_SECRET` | Simple y sin estado |
@@ -43,5 +43,7 @@ Cómo se construye lo que dicen [`spec.md`](spec.md) y [`constitution.md`](const
 
 ## 4. Orden de construcción
 
-Esqueleto y salud → migración inicial con semilla → dominio → casos de uso con fakes → adaptadores → API → pruebas de contrato y concurrencia.
-El detalle, con evidencia, está en [`tasks.md`](tasks.md).
+
+Esqueleto y salud → migraciones iniciales con semilla → dominio → casos de uso con fakes → adaptadores de persistencia y seguridad → API → composición y arranque → pruebas de contrato y concurrencia.
+
+El detalle y la evidencia verificable de cada tarea están en [`tasks.md`](tasks.md).
